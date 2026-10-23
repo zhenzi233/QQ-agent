@@ -86,17 +86,36 @@ const appLogFns = new WeakSet();
 // onebot.js 已把它渲染成 `[表情包#指纹]`;这里补上「本群第几次」,
 // 让"又发这个"这种反应成为可能。按会话隔离,存 data/sticker-seen.json。
 const STICKER_SEEN_FILE = path.join(DATA_DIR, 'sticker-seen.json');
-let stickerSeenCache = null;
+let stickerSeenCache = null;   // { day, chats: { chatKey: { fp: n } } }
+
+// 本地日期(YYYY-MM-DD)。用本地时区而不是 UTC：跨天要对得上群友的作息,
+// 北京时间 0 点清零才符合"今天的次数"这个说法。
+function stickerDayKey(now = Date.now()) {
+  const d = new Date(now);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function loadStickerSeen(day) {
+  if (stickerSeenCache && stickerSeenCache.day === day) return stickerSeenCache;
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(STICKER_SEEN_FILE, 'utf8')); }
+  catch { raw = null; }
+  // 旧结构(直接是 {chatKey:{fp:n}})自动迁移成按天结构，跨天即视为新的一天
+  const chats = raw && typeof raw === 'object' && raw.chats ? raw.chats
+    : (raw && typeof raw === 'object' ? raw : {});
+  // 旧结构没有 day 字段:它记录的就是当天的数据,按今天保留(否则升级当天的计数会被清空)
+  const sameDay = Boolean(raw) && (raw.day === day || !raw.day);
+  stickerSeenCache = { day, chats: sameDay ? chats : {} };
+  return stickerSeenCache;
+}
 
 function bumpStickerSeen(chatKey, fp) {
   try {
-    if (!stickerSeenCache) {
-      try { stickerSeenCache = JSON.parse(fs.readFileSync(STICKER_SEEN_FILE, 'utf8')); }
-      catch { stickerSeenCache = {}; }
-    }
-    const perChat = stickerSeenCache[chatKey] || (stickerSeenCache[chatKey] = {});
+    const store = loadStickerSeen(stickerDayKey());
+    const perChat = store.chats[chatKey] || (store.chats[chatKey] = {});
     perChat[fp] = (Number(perChat[fp]) || 0) + 1;
-    fs.writeFileSync(STICKER_SEEN_FILE, JSON.stringify(stickerSeenCache));
+    fs.writeFileSync(STICKER_SEEN_FILE, JSON.stringify(store));
     return perChat[fp];
   } catch { return 1; }
 }
