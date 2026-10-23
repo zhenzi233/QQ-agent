@@ -249,3 +249,42 @@ export async function gifFirstFrameDataUrl(buffer) {
     try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch { /* ignore */ }
   }
 }
+
+/**
+ * GIF → 2x2 帧拼图（单张 PNG）。
+ *
+ * 用途：模型只支持图片输入（api.video 关闭）时，直接发 GIF 往往只被解码第一帧，
+ * 模型只能说「只拿到第一帧」。这里把 4 帧按时间顺序拼成一张图，动作走向就看得见了。
+ * 失败（没 ffmpeg / 文件异常）返回 null，调用方退回原样发送，不影响既有降级路径。
+ */
+export async function gifContactSheetDataUrl(buffer) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) return null;
+  const stamp = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const tmpIn = path.join(os.tmpdir(), `qqa_gif4_in_${stamp}.gif`);
+  const tmpOut = path.join(os.tmpdir(), `qqa_gif4_out_${stamp}.png`);
+  try {
+    fs.writeFileSync(tmpIn, buffer);
+    // fps=3 + tile=2x2：约 1.3 秒内均匀取 4 帧；-t 4 兜住超长 GIF
+    // 每格长边压到 360px，拼完 ≈720px，token 与清晰度折中。
+    const okRun = await runOk(ffmpeg, [
+      '-y',
+      '-ignore_loop', '0',
+      '-t', '4',
+      '-i', tmpIn,
+      '-vf', "fps=3,scale='min(360,iw)':'min(360,ih)':force_original_aspect_ratio=decrease,tile=2x2",
+      '-frames:v', '1',
+      '-an',
+      tmpOut
+    ], 25000);
+    if (!okRun || !fs.existsSync(tmpOut)) return null;
+    const out = fs.readFileSync(tmpOut);
+    if (!out.length || out.length > 6 * 1024 * 1024) return null;
+    return `data:image/png;base64,${out.toString('base64')}`;
+  } catch {
+    return null;
+  } finally {
+    try { if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn); } catch { /* ignore */ }
+    try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch { /* ignore */ }
+  }
+}

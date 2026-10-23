@@ -17,7 +17,7 @@ import { registerTool, listTools } from './tool-registry.js';
 import { holidayOn, upcomingHoliday } from './holidays.js';
 import { compressImage } from './image-compress.js';
 import { localStickerPath } from './sticker-manager.js';
-import { isGifBuffer, gifToVideoDataUrl, resolveGifRoute } from './gif-to-video.js';
+import { isGifBuffer, gifToVideoDataUrl, resolveGifRoute, gifContactSheetDataUrl } from './gif-to-video.js';
 
 /** 当前配置的 GIF 选路（vision/video 开关组合，规则矩阵见 resolveGifRoute 注释）。 */
 function currentGifRoute() {
@@ -34,6 +34,18 @@ async function downloadImageAsDataUrl(url, timeoutMs = 30000) {
   //   只开 vision      → GIF 按图片原样发（读不了的模型由 llm.js 的"图片被拒"
   //                      降级路径换首帧重试 —— 见 image-compat 的 llm.retry-advisor）；
   //   vision 没开      → 看图工具整体不可用，不会被调到。
+  // 只开图片输入时：先尝试把 GIF 拼成 4 帧一张图（否则多数模型只解码第一帧）
+  if (isGifBuffer(buffer) && currentGifRoute() !== 'video') {
+    const sheet = await gifContactSheetDataUrl(buffer);
+    if (sheet) {
+      return {
+        dataUrl: sheet,
+        isGif: false,
+        gifSheet: { frames: 4 },
+        gifBuffer: buffer
+      };
+    }
+  }
   if (isGifBuffer(buffer) && currentGifRoute() === 'video') {
     const video = await gifToVideoDataUrl(buffer);
     if (video) {
