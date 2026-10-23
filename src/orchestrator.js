@@ -1189,10 +1189,20 @@ export class Orchestrator {
             imgCount ? `${imgCount} 张图片` : '',
             vidCount ? `${vidCount} 段视频` : ''
           ].filter(Boolean).join(' + ');
+          // 补图消息必须带上"这次调用是谁、参数是什么"，否则连续两次看图
+          // （先 #A 再看 #B）时两条补图消息文本完全相同，模型只能靠顺序猜，
+          // 就会出现"说的是第一条图的 mid、描述的却是最后一张图"。
+          const rawArgs = safeParse(argsRaw) ?? {};
+          const argBrief = Object.entries(rawArgs)
+            .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+            .join(' ')
+            .slice(0, 120);
+          const callLabel = argBrief ? `${name}（${argBrief}）` : name;
           imageUserMessages.push({
             role: 'user',
             content: [
-              { type: 'text', text: `[系统：以下是工具 ${name} 返回的 ${what}，请直接"看"了回应]` },
+              { type: 'text', text: `[系统：以下是工具 ${callLabel} 返回的 ${what}，请直接"看"了回应；`
+                + `这些图只属于上面这一次调用，不要和别的调用返回的图混起来]` },
               ...media
             ]
           });
