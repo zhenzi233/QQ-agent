@@ -529,6 +529,16 @@ export class Orchestrator {
       ? { tier: 3, count: Math.max(0, Number(storeConfigForChat(chatKey).historyCount) || 80), reason: `活跃期（话题：${activeState.topic}）`, shouldRespond: true }
       : tierResult;
 
+    // 重掷未命中：onIncoming 时命中过，唤醒时重掷没命中（随机档的二次抽签）。
+    // prompt.js 的约定是「调用方标已读、不建会话、不调模型」；这里必须真的拦下，
+    // 否则会带着 count=0 的历史照样开口——表现就是"这bot不联系上下文"。
+    if (!proactive && !activeState && !effectiveTier.shouldRespond) {
+      this.store.markAllRead(chatKey);
+      this.emit('chat-update', chatKey);
+      if (waitingSessionId) this.#discardWaiting(waitingSessionId);
+      return;
+    }
+
     this.runningChats.add(chatKey);
     const seq = (this.runSeq.get(chatKey) || 0) + 1;
     this.runSeq.set(chatKey, seq);
