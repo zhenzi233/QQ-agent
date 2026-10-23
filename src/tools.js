@@ -39,9 +39,9 @@ async function downloadImageAsDataUrl(url, timeoutMs = 30000) {
     const sheet = await gifContactSheetDataUrl(buffer);
     if (sheet) {
       return {
-        dataUrl: sheet,
+        dataUrl: sheet.dataUrl,
         isGif: false,
-        gifSheet: { frames: 4 },
+        gifSheet: { frames: sheet.frames, cols: sheet.cols, rows: sheet.rows, seconds: sheet.seconds },
         gifBuffer: buffer
       };
     }
