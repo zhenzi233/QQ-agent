@@ -1275,7 +1275,9 @@ export class Orchestrator {
       // 给 UI 的简化消息流（跳过纯 tool 结果的重复展示）
     }
 
-    // 收尾：发过话 = done；没发 = noreply（这是正常选项）
+    // 收尾：应回而未回时先尝试补发（见 #fallbackSendDraft）
+    await this.#fallbackSendDraft(session, chatKey);
+    // 发过话 = done；没发 = noreply（这是正常选项）
     const status = session.error ? 'error' : (session.sent.length > 0 ? 'done' : 'noreply');
     this.sessionAbortControllers.delete(session.id);
     this.sessions.finish(session.id, status);
@@ -1709,6 +1711,51 @@ export class Orchestrator {
   }
 
   /** 生成人话总结：区分"整理过但没变化"与"真的失败了"。 */
+  /**
+   * 应回而未回时的保守补发（fallback-send-draft，2026-10-23）。
+   *
+   * 只处理：这一轮一条都没发出去，但触发场景本来就该回（私聊 / 被 @ / 1~2 档），
+   * 且模型最后一条正文看起来是成品短句。判定刻意保守 —— 宁可沉默，也不把内心戏发进群。
+   */
+  async #fallbackSendDraft(session, chatKey) {
+    try {
+      if (!session || session.error) return false;
+      if ((session.sent || []).length > 0) return false;
+      const tier = Number(session.contextTier);
+      const obligated = String(chatKey).startsWith('private:')
+        || (Number.isFinite(tier) && tier >= 1 && tier <= 2);
+      if (!obligated) return false;
+
+      let draft = '';
+      for (let i = (session.messages || []).length - 1; i >= 0; i--) {
+        const m = session.messages[i];
+        if (m?.role !== 'assistant' || typeof m.content !== 'string') continue;
+        const text = m.content.trim();
+        if (text) { draft = text; break; }
+      }
+      if (!draft) return false;
+
+      // 思考块不能发：出现中文方括号标记通常就是计划/内心戏，整条放弃
+      if (draft.includes('【') || draft.includes('】')) return false;
+      if (draft.includes('```') || draft.startsWith('#') || draft.startsWith('- ')) return false;
+      if (/^(让我|我应该|我需要|先看|先查|看看|检查一下)/.test(draft)) return false;
+      if (draft.length > 120) return false;
+
+      const res = await this.sender.sendTextBatch(chatKey, [draft], {});
+      const sent = res?.sent || [];
+      if (!sent.length) return false;
+      session.sent.push(...sent.map((x) => ({ type: 'text', text: x.text, at: x.at })));
+      session.fallbackSent = true;
+      this.sessions.update(session.id);
+      this.emit('session-update', session.id);
+      console.log(`[orchestrator] ${chatKey} 补发未送出的草稿（${draft.length} 字）`);
+      return true;
+    } catch (error) {
+      console.warn(`[orchestrator] 补发草稿失败: ${error?.message ?? error}`);
+      return false;
+    }
+  }
+
   #buildConsolidateNote({ total, changed, failed, skipped, only, discoveredCount = 0 }) {
     const skippedNote = skipped.length
       ? `（跳过 ${skipped.length} 位：${skipped.slice(0, 3).map((s) => `${s.name || s.userId} ${s.reason}`).join('；')}${skipped.length > 3 ? ' 等' : ''}）`
