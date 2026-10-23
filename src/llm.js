@@ -207,6 +207,41 @@ export function isRetryableError(error) {
  *   额外带 _usedModel（实际成功的模型 id）与 _usedApi（实际使用的端点配置），
  *   调用方据此同步 session.model / session.vendor，保证成本看板的「渠道:模型」同源。
  */
+/**
+ * 裁掉上下文里较早的图片部件。
+ *
+ * 工具返回的图会以 user 消息（text + image_url）留在对话里，每轮请求都会重发。
+ * 连续看 8 次图 = 8 张图要在后面每一轮里重复上传，token 与时延都按倍增长，
+ * 表现就是"思考完卡住不动"。这里只留最近 keep 条带图消息，其余替换成文字占位。
+ *
+ * 只动 image_url / video_url 部件，文本与 tool 消息一律保持原样。
+ */
+export function pruneOldImageParts(messages, keep = 2) {
+  const limit = Number(keep);
+  if (!Array.isArray(messages) || !Number.isFinite(limit) || limit < 0) return messages;
+  const withMedia = [];
+  for (let i = 0; i < messages.length; i++) {
+    const c = messages[i]?.content;
+    if (!Array.isArray(c)) continue;
+    if (c.some((p) => p?.type === 'image_url' || p?.type === 'video_url')) withMedia.push(i);
+  }
+  if (withMedia.length <= limit) return messages;
+  const dropIdx = new Set(withMedia.slice(0, withMedia.length - limit));
+  const out = messages.map((m, i) => {
+    if (!dropIdx.has(i) || !Array.isArray(m?.content)) return m;
+    const kept = m.content.filter((p) => p?.type !== 'image_url' && p?.type !== 'video_url');
+    const dropped = m.content.length - kept.length;
+    return {
+      ...m,
+      content: [
+        ...kept,
+        { type: 'text', text: `[早前查看过的 ${dropped} 张图片已省略，需要重看请再次调用看图工具]` }
+      ]
+    };
+  });
+  return out;
+}
+
 export async function chatCompletionWithRetry(args, retries = 2) {
   const candidates = buildCandidateApis();
   let lastError = null;
@@ -266,6 +301,11 @@ export async function chatCompletionWithRetry(args, retries = 2) {
  *    所以 Skill 只能给函数（改 body / 给建议），重试动作由本函数执行。
  */
 export async function chatCompletion({ messages, tools = null, toolChoice = 'auto', temperature = null, signal = null, overrides = null, skillContext = null, maxTokens = 0 }) {
+  // 多轮看图时，旧图片每轮都会被重发；只保留最近若干张（config.api.keepRecentImages）
+  try {
+    const keep = Number(getConfig()?.api?.keepRecentImages);
+    messages = pruneOldImageParts(messages, Number.isFinite(keep) ? keep : 2);
+  } catch { /* 配置读取失败就按默认裁剪 */ }
   const baseApi = overrides || effectiveApi();
   // 主调用路径才切"图片/视频专用模型"（见 specializedModelFor 注释）
   let api = baseApi;
