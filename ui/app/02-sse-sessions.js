@@ -345,8 +345,25 @@ function renderSessionList() {
   // 会话可能积累到几百条，全量渲染会让列表变卡。
   state.sessionLimit = Math.max(SESSION_PAGE, Number(state.sessionLimit) || SESSION_PAGE);
   const all = state.sessions || [];
-  const shown = all.slice(0, state.sessionLimit);
-  const rest = all.length - shown.length;
+  // 按群/私聊筛选：下拉选项从当前会话列表里动态生成（会话增减时重建，保留已选值）
+  const filterBox = $('#session-chat-filter');
+  if (filterBox) {
+    const keys = [...new Set(all.map((s) => s.chatKey).filter(Boolean))];
+    const sig = keys.join('|');
+    if (filterBox.dataset.sig !== sig) {
+      const cur = String(state.sessionChatFilter || '');
+      filterBox.dataset.sig = sig;
+      filterBox.innerHTML = '<option value="">全部会话</option>' + keys.map((k) =>
+        `<option value="${esc(k)}">${esc(formatChatTitle(k, chatNameOf(k)))}</option>`).join('');
+      filterBox.value = keys.includes(cur) ? cur : '';
+      state.sessionChatFilter = filterBox.value;
+    }
+  }
+  const filtered = state.sessionChatFilter
+    ? all.filter((s) => s.chatKey === state.sessionChatFilter)
+    : all;
+  const shown = filtered.slice(0, state.sessionLimit);
+  const rest = filtered.length - shown.length;
   box.innerHTML = shown.map((s) => {
     const chatName = formatChatTitle(s.chatKey, chatNameOf(s.chatKey));
     const waitHtml = s.status === 'waiting' && s.waitUntil
@@ -390,12 +407,12 @@ function renderSessionList() {
   if (more) {
     more.textContent = rest > 0
       ? `向下滚动加载更多（还有 ${rest} 条）`
-      : (all.length > SESSION_PAGE ? `已显示全部 ${all.length} 条` : '');
+      : (filtered.length > SESSION_PAGE ? `已显示全部 ${filtered.length} 条` : '');
   }
   // 头部显示总数（已显示 / 总数），便于确认分页是否真的加载完了
   const cnt = $('#session-count');
   if (cnt) {
-    cnt.textContent = all.length ? `${shown.length}/${all.length}` : '';
+    cnt.textContent = filtered.length ? `${shown.length}/${filtered.length}` : '';
   }
   for (const s of state.sessions) state.seenSessionIds.add(s.id);
   $$('.session-item', box).forEach((el) => {

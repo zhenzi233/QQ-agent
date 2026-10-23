@@ -444,7 +444,19 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
         break;
       }
       case 'face': out.push(`[表情${d.id ?? ''}]`); break;
-      case 'image': out.push('[图片]'); break;
+      case 'image': {
+        // 表情包与普通图片要分开标：否则模型看到的永远是同一个 `[图片]`，
+        // 分不出「同一个表情又发了一次」（2026-10-23 用户反馈：反应像第一次见）。
+        // 指纹取协议端文件名前 8 位（QQ 侧就是 md5），同一张图永远同一个指纹。
+        const summary = String(d.summary ?? '');
+        const base = String(d.file ?? '').split(/[\\/]/).pop() || '';
+        const fp = /^[0-9A-Fa-f]{16,}/.exec(base) ? base.slice(0, 8).toUpperCase() : '';
+        const isSticker = summary.includes('动画表情') || summary.includes('表情')
+          || /\{\}\s*$/.test(summary) || Boolean(d.emoji_id) || Boolean(d.key);
+        if (isSticker) out.push(fp ? `[表情包#${fp}]` : '[表情包]');
+        else out.push('[图片]');
+        break;
+      }
       case 'record': {
         // 语音转文字走 `media.transcribe` 能力（speech-to-text 插件提供）。
         // 只在主消息路径转写（onebot 由调用方传入）：转发链里逐条跑 whisper
@@ -523,6 +535,28 @@ export function extractMediaFromSegments(segments) {
  * @param {Array} nodes get_forward_msg 返回的 messages 数组
  * @returns {{ text: string, media: Array } | null} 无可用节点返回 null
  */
+/**
+ * 解析合并转发的 res_id。
+ *
+ * SnowLuma/NapCat 的 get_forward_msg 只认转发卡片上的 res_id（长字符串）；
+ * 传 message_id 时它会退回把 message_id 当 id 用，QQ 侧返回
+ * "download forward message payload is empty"（2026-10-23 实测）。
+ * 所以先 get_msg 取该消息的 forward 段 data.id，取不到再让调用方走旧路。
+ */
+export async function resolveForwardId(onebot, messageId) {
+  try {
+    const ev = await onebot.call('get_msg', { message_id: Number(messageId) });
+    const segs = ev?.message ?? ev?.data?.message ?? [];
+    for (const seg of Array.isArray(segs) ? segs : []) {
+      if (!seg || seg.type !== 'forward') continue;
+      const d = seg.data ?? {};
+      const id = d.id ?? d.res_id ?? d.forward_id;
+      if (id) return String(id);
+    }
+  } catch { /* 取不到就走 message_id 旧路 */ }
+  return '';
+}
+
 export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000 } = {}) {
   if (!Array.isArray(nodes) || !nodes.length) return null;
   const lines = [];

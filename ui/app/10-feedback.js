@@ -859,6 +859,13 @@ $('#quote-btn')?.addEventListener('click', () => {
 });
 $('#quote-confirm-btn')?.addEventListener('click', () => openQuoteConfirmModal());
 
+// 会话列表「按群筛选」：选中后只显示该会话的会话记录
+$('#session-chat-filter')?.addEventListener('change', (e) => {
+  state.sessionChatFilter = String(e.target.value || '');
+  state.sessionLimit = Math.max(20, Number(state.sessionLimit) || 20);
+  renderSessionList();
+});
+
 // 会话列表「清空」：清空全部已结束的会话记录（保留运行中/等待中的）
 $('#session-clear-btn')?.addEventListener('click', async () => {
   const total = (state.sessions || []).length;

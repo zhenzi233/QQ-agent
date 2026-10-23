@@ -12,7 +12,7 @@ import { formatStickerList } from './stickers.js';
 import { skillManager } from './skills/manager.js';
 import { validateImageUrl, safeFetchBinary, browseLockState, checkBrowseLock } from './safe-fetch.js';
 import { webSearch, webFetch } from './web-search.js';
-import { expandForwardNodes } from './onebot.js';
+import { expandForwardNodes, resolveForwardId } from './onebot.js';
 import { registerTool, listTools } from './tool-registry.js';
 import { holidayOn, upcomingHoliday } from './holidays.js';
 import { compressImage } from './image-compress.js';
@@ -517,7 +517,10 @@ function registerAllTools() {
         if (String(entry.text || '').startsWith('[合并转发 共')) {
           return ok({ messageId: entry.mid, text: entry.text, note: '该转发已展开（读的是存档）' });
         }
-        const r = await ctx.onebot.call('get_forward_msg', { message_id: Number(entry.mid) });
+        const fwdId = await resolveForwardId(ctx.onebot, entry.mid).catch(() => '');
+        const r = fwdId
+          ? await ctx.onebot.call('get_forward_msg', { id: fwdId })
+          : await ctx.onebot.call('get_forward_msg', { message_id: Number(entry.mid) });
         const nodes = Array.isArray(r?.messages) ? r.messages : [];
         const ex = await expandForwardNodes(nodes);
         if (!ex || !ex.text) return err('转发内容为空或已被 QQ 服务端丢弃（发送时间太久）');
@@ -608,21 +611,33 @@ function registerAllTools() {
   registerTool({
     id: 'get_message_images',
     name: '查看消息图片',
-    description: '查看某条消息里的图片/表情（视觉模型可以直接看懂）。消息文本出现 [图片] 时可用。id 用聊天记录里每条消息前的 #数字。',
+    description: '查看某条消息里的图片/表情（视觉模型可以直接看懂）。消息文本出现 [图片] 时可用。id 用聊天记录里每条消息前的 #数字。一条消息里图片很多时（比如合并转发）每次最多看 4 张，用 offset 往后翻，不要一次要求全部。',
     category: 'query',
     icon: '🖼️',
     requiresVision: true,
     parameters: {
       type: 'object',
-      properties: { messageId: { type: ['integer', 'string'], description: 'QQ 消息 id（聊天记录里的 #数字，可能为负数）' } },
+      properties: {
+        messageId: { type: ['integer', 'string'], description: 'QQ 消息 id（聊天记录里的 #数字，可能为负数）' },
+        offset: { type: 'integer', description: '跳过前 N 张，默认 0；图多时用它往后翻' },
+        limit: { type: 'integer', description: '本次最多看几张，默认 4，最大 6' }
+      },
       required: ['messageId']
     },
     async execute(ctx, args) {
       try {
         const entry = ctx.store.findByMid(ctx.chatKey, args.messageId);
         if (!entry) return err(`当前会话找不到消息 ${args.messageId}。${midHint(ctx)}`);
-        const urls = (entry.media || []).filter((m) => m.kind === 'image' && m.url).map((m) => m.url);
-        if (!urls.length) return ok(`消息 ${args.messageId} 没有可查看的图片`);
+        const allUrls = (entry.media || []).filter((m) => m.kind === 'image' && m.url).map((m) => m.url);
+        if (!allUrls.length) return ok(`消息 ${args.messageId} 没有可查看的图片`);
+        // 分页：一条消息（尤其合并转发）可能带几十张图，一次全塞 base64 会到十几 MB，
+        // 模型接口直接 400/413，表现就是"看不到聊天记录里的图片"。默认一次 4 张。
+        const offset = Math.max(0, Number(args.offset) || 0);
+        const limit = Math.min(6, Math.max(1, Number(args.limit) || 4));
+        const urls = allUrls.slice(offset, offset + limit);
+        if (!urls.length) {
+          return ok(`消息 ${args.messageId} 共 ${allUrls.length} 张图，offset=${offset} 已经超出范围`);
+        }
         const results = [];
         const failed = [];
         for (const url of urls) {
@@ -637,7 +652,11 @@ function registerAllTools() {
           imageCount ? `${imageCount} 张图片` : '',
           videoCount ? `${videoCount} 段视频（由 GIF 动图转换，≤480px/≤24帧）` : ''
         ].filter(Boolean).join(' + ');
-        const built = getImagePartsOrVideo(`消息 ${args.messageId} 的内容${note}：${what}。`, results);
+        const shownTo = offset + urls.length;
+        const more = shownTo < allUrls.length
+          ? `（这条消息共 ${allUrls.length} 张，本次看第 ${offset + 1}-${shownTo} 张；还有 ${allUrls.length - shownTo} 张，用 offset=${shownTo} 继续）`
+          : `（这条消息共 ${allUrls.length} 张，已全部看完）`;
+        const built = getImagePartsOrVideo(`消息 ${args.messageId} 的内容${note}：${what}。${more}`, results);
         return built;
       } catch (error) {
         return err(error?.message ?? error);

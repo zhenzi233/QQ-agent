@@ -7,7 +7,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getConfig, updateConfig, ROOT, DATA_DIR } from './config.js';
-import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes } from './onebot.js';
+import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes, resolveForwardId } from './onebot.js';
 import { isAtMe } from './prompt.js';
 import { ChatStore } from './store.js';
 import { MemoryStore } from './memory.js';
@@ -80,6 +80,34 @@ function compareSemver(a, b) {
    用于识别"调用方传入的 log 是不是上一次 createApp 留下的 appLog"，
    防止监听器链式递归（见 createApp 内的递归护栏注释）。 */
 const appLogFns = new WeakSet();
+
+// ── 表情包重复识别计数（2026-10-23）────────────────────────────────
+// 群友反复发同一个表情时,模型只看到 `[图片]` 会当成第一次见。
+// onebot.js 已把它渲染成 `[表情包#指纹]`;这里补上「本群第几次」,
+// 让"又发这个"这种反应成为可能。按会话隔离,存 data/sticker-seen.json。
+const STICKER_SEEN_FILE = path.join(DATA_DIR, 'sticker-seen.json');
+let stickerSeenCache = null;
+
+function bumpStickerSeen(chatKey, fp) {
+  try {
+    if (!stickerSeenCache) {
+      try { stickerSeenCache = JSON.parse(fs.readFileSync(STICKER_SEEN_FILE, 'utf8')); }
+      catch { stickerSeenCache = {}; }
+    }
+    const perChat = stickerSeenCache[chatKey] || (stickerSeenCache[chatKey] = {});
+    perChat[fp] = (Number(perChat[fp]) || 0) + 1;
+    fs.writeFileSync(STICKER_SEEN_FILE, JSON.stringify(stickerSeenCache));
+    return perChat[fp];
+  } catch { return 1; }
+}
+
+function annotateStickerRepeats(text, chatKey) {
+  if (!text || !text.includes('[表情包#')) return text;
+  return text.replace(/\[表情包#([0-9A-F]{8})\]/g, (whole, fp) => {
+    const n = bumpStickerSeen(chatKey, fp);
+    return n > 1 ? `[表情包#${fp} 本群第${n}次]` : whole;
+  });
+}
 
 export function createApp({ log = console.log } = {}) {
   const cfg = getConfig();
@@ -860,7 +888,10 @@ export function createApp({ log = console.log } = {}) {
     // 展开失败时占位符留在存档里，模型可用 read_forward 工具稍后重试。
     if (segments && (text.includes('[合并转发') || text.includes('[转发消息')) && event.message_id != null) {
       try {
-        const r = await onebot.call('get_forward_msg', { message_id: Number(event.message_id) });
+        const fwdId = await resolveForwardId(onebot, event.message_id).catch(() => '');
+        const r = fwdId
+          ? await onebot.call('get_forward_msg', { id: fwdId })
+          : await onebot.call('get_forward_msg', { message_id: Number(event.message_id) });
         const nodes = Array.isArray(r?.messages) ? r.messages : (Array.isArray(r?.data?.messages) ? r.data.messages : []);
         const ex = await expandForwardNodes(nodes);
         if (ex && ex.text) {
@@ -897,6 +928,9 @@ export function createApp({ log = console.log } = {}) {
     if (kind === 'group') {
       maybeTriggerCommandMute(id, text, event, atMe);
     }
+
+    // 表情包重复计数：同一张表情在本群第几次出现，让模型能说"又发这个"
+    text = annotateStickerRepeats(text, `${kind}:${id}`);
 
     const entry = store.appendIncoming(`${kind}:${id}`, {
       mid: event.message_id,
