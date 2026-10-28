@@ -21,6 +21,9 @@ node_modules/
 .trash/
 *.tmp
 *.bak
+# 打补丁时留的备份（src/*.bak_stkper、config.json.bak_xxx 之类）——
+# 本地排障用的，不该进版本库：既没意义、又容易让人以为是要提交的文件。
+*.bak_*
 
 # 便携 QQ 运行时（setup 脚本下载/安装，不入库）
 runtime/
@@ -40,6 +43,11 @@ dist/
 release/
 *.exe
 *.msi
+
+# 本地装的表情包扩展：从插件市场下载的第三方代码（sticker-steal 及其补丁版等），
+# 不是本项目的改动，也不适合当自己的代码提交。想分享请给市场口令。
+skills/
+plugins/
 
 # 注意：build/installer.nsh 是安装器源码（旧版迁移向导），要进版本库
 
