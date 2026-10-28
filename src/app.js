@@ -854,15 +854,44 @@ export function createApp({ log = console.log } = {}) {
     try {
       const msg = await onebot.getMsg(messageId);
       const senderName = msg?.sender?.card || msg?.sender?.nickname || '';
+      // 段落 → 人类可读占位符。原来直接 `[${s.type}]`，会把图片写成 `[image]`，
+      // 模型既认不出那是图、也没有可用的 id 去调 get_message_images。
+      const segLabel = (s) => {
+        const d = s?.data ?? {};
+        switch (s?.type) {
+          case 'text': return String(d.text ?? '');
+          case 'image':
+          case 'mface': {
+            const sum = String(d.summary ?? '').trim();
+            return sum ? `[图片：${sum}]` : '[图片]';
+          }
+          case 'face': return '[QQ表情]';
+          case 'record': return '[语音]';
+          case 'video': return '[视频]';
+          case 'file': return '[文件]';
+          case 'forward': return '[合并转发]';
+          case 'reply': return '';          // 引用套引用：只取最外层
+          case 'json': return '[卡片]';
+          default: return `[${s?.type ?? '未知'}]`;
+        }
+      };
       let text = '';
       if (Array.isArray(msg?.message)) {
-        text = msg.message.map((s) => (s.type === 'text' ? s.data?.text ?? '' : `[${s.type}]`)).join('').trim();
+        text = msg.message.map(segLabel).join('').trim();
       } else if (typeof msg?.message === 'string') {
         text = msg.message;
       }
       // senderId 一并带回：引用块显示为 名字(QQ:xxx)，与发言人标签同口径 ——
       // 没有它，模型分不清引用的是"哪个张三"
-      return { sender: String(senderName), senderId: String(msg?.sender?.user_id ?? ''), text: String(text).slice(0, 120) };
+      // id 一并带回：引用里可能是图片，模型需要它去调 get_message_images
+      return {
+        sender: String(senderName),
+        senderId: String(msg?.sender?.user_id ?? ''),
+        text: String(text).slice(0, 120),
+        hasMedia: Array.isArray(msg?.message)
+          && msg.message.some((x) => ['image', 'mface', 'video', 'record'].includes(x?.type)),
+        id: String(messageId)
+      };
     } catch {
       return null;
     }

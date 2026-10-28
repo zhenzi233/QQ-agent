@@ -1438,6 +1438,8 @@ async function saveConfig({ quiet = false } = {}) {
     };
     patch.sticker = {
       ...(c.sticker || {}),
+      // 分群开关；groupOverrides 由群编辑器直接写进 c.sticker 后随 ...(c.sticker) 一起提交
+      unifiedSticker: chk('#stk-unified', c.sticker?.unifiedSticker !== false),
       enabled: chk('#cfg-sticker', !!c.sticker?.enabled),
       encourage: Math.min(3, Math.max(0, Number(val('#cfg-sticker-encourage', c.sticker?.encourage ?? 1)) || 0)),
       promptMaxStickers: Math.min(50, Math.max(1, Number(val('#cfg-sticker-promptmax', c.sticker?.promptMaxStickers ?? 10)) || 10))

@@ -403,6 +403,9 @@ function bindSettingsEvents(c) {
   //（该按钮从未渲染，模态框不可达 = 一整套死写点）。
   // 活跃设置编辑器已内联进聊天设置的「活跃设置」折叠卡（#ac-editor），
   // 每次重渲染后原地挂载；旧挂载的滑条监听由其 MutationObserver 随节点摘除自动销毁。
+  // ── 表情包分群编辑器（与活跃设置同款交互：卡头统一开关 + 群按钮）──
+  mountStickerGroupEditor();
+
   const acRoot = $('#ac-editor');
   if (acRoot) mountActiveConfigEditor(acRoot);
 
@@ -985,3 +988,122 @@ function bindSettingsEvents(c) {
     resetDataBtn.disabled = false;
   });
 }
+
+  /**
+   * 表情包分群编辑器。
+   *
+   * 数据形状：state.config.sticker.groupOverrides = { "群号": { enabled, encourage, promptMaxStickers } }。
+   * 编辑即写 state.config，再走一次自动保存（与其它聊天设置字段同一条链路），
+   * 所以没有「保存/取消」按钮，也不会和其他字段的草稿互相覆盖。
+   */
+  function mountStickerGroupEditor() {
+    const area = $('#stk-group-area');
+    const unifiedBox = $('#stk-unified');
+    if (!area || !unifiedBox) return;
+    // 顶层函数拿不到 bindSettingsEvents 里的 scheduleSave，这里自带一个 300ms 防抖，
+    // 复用全局 saveConfig（聊天设置区块的同一套保存链）。
+    let stkSaveTimer = null;
+    const queueSave = () => {
+      clearTimeout(stkSaveTimer);
+      stkSaveTimer = setTimeout(() => {
+        saveConfig({ quiet: true }).catch((err) => console.warn('表情包分群保存失败', err));
+      }, 300);
+    };
+    const cfg = () => (state.config || {});
+    const stickerOf = () => (cfg().sticker || (cfg().sticker = {}));
+    const groups = () => (Array.isArray(cfg().allow?.groups) ? cfg().allow.groups.map(String) : []);
+    const overrides = () => (stickerOf().groupOverrides || (stickerOf().groupOverrides = {}));
+    let activeGid = '';
+
+    const syncVisibility = () => {
+      const unified = unifiedBox.checked !== false;
+      area.style.display = unified ? 'none' : '';
+      if (!unified) renderChips();
+    };
+
+    const renderChips = () => {
+      const box = $('#stk-group-buttons');
+      if (!box) return;
+      const list = groups();
+      if (!activeGid && list.length) activeGid = list[0];
+      box.innerHTML = list.map((gid) => {
+        const has = overrides()[gid] && typeof overrides()[gid] === 'object';
+        const name = (typeof chatNameOf === 'function' ? chatNameOf('group:' + gid) : '') || gid;
+        return `<button type="button" class="btn btn-small stk-group-btn${gid === activeGid ? ' btn-primary' : ''}" data-gid="${esc(gid)}">${esc(name)}${has ? ' ·' : ''}</button>`;
+      }).join('') || '<span class="hint">白名单里还没有群</span>';
+      renderEditor();
+    };
+
+    const renderEditor = () => {
+      const box = $('#stk-group-editor');
+      if (!box) return;
+      if (!activeGid) { box.innerHTML = ''; return; }
+      const cur = overrides()[activeGid] || {};
+      const g = stickerOf();
+      const name = (typeof chatNameOf === 'function' ? chatNameOf('group:' + activeGid) : '') || activeGid;
+      const lvl = Number.isFinite(Number(cur.encourage)) ? Number(cur.encourage) : Number(g.encourage ?? 1);
+      const max = Number.isFinite(Number(cur.promptMaxStickers)) ? Number(cur.promptMaxStickers) : Number(g.promptMaxStickers ?? 10);
+      const en = cur.enabled === true || cur.enabled === false ? cur.enabled : (g.enabled !== false);
+      box.innerHTML = `
+        <div class="field-row">
+          <div class="field"><label>${esc(name)} · 发表情积极程度</label>
+            <select id="stk-g-encourage">
+              ${(typeof STICKER_LEVELS !== 'undefined' ? STICKER_LEVELS : [[0, '0 · 不鼓励'], [1, '1 · 偶尔'], [2, '2 · 较积极'], [3, '3 · 很积极']])
+                .map(([v, label]) => `<option value="${v}" ${Number(v) === lvl ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+            </select></div>
+          <div class="field"><label>提示词列举数量（1~50）</label>
+            <input type="number" id="stk-g-promptmax" min="1" max="50" value="${esc(max)}" /></div>
+        </div>
+        <div class="checkbox-row"><input type="checkbox" id="stk-g-enabled" ${en ? 'checked' : ''} />
+          <label for="stk-g-enabled">该群启用表情包</label></div>`;
+
+      const persist = () => {
+        const all = overrides();
+        all[activeGid] = {
+          ...(all[activeGid] || {}),
+          encourage: Math.min(3, Math.max(0, Number($('#stk-g-encourage')?.value) || 0)),
+          promptMaxStickers: Math.min(50, Math.max(1, Number($('#stk-g-promptmax')?.value) || 10)),
+          enabled: !!$('#stk-g-enabled')?.checked
+        };
+        queueSave();
+      };
+      for (const sel of ['#stk-g-encourage', '#stk-g-promptmax', '#stk-g-enabled']) {
+        $(sel)?.addEventListener('change', persist);
+      }
+    };
+
+    unifiedBox.addEventListener('change', () => {
+      syncVisibility();
+      queueSave();
+    });
+
+    $('#stk-group-buttons')?.addEventListener('click', (e) => {
+      const btn = e.target.closest?.('.stk-group-btn');
+      if (!btn) return;
+      activeGid = String(btn.dataset.gid || '');
+      renderChips();
+    });
+
+    // 显式保存：立刻提交（不等防抖），并给出可见反馈
+    $('#stk-group-save')?.addEventListener('click', async () => {
+      const hint = $('#stk-group-hint');
+      try {
+        clearTimeout(stkSaveTimer);
+        if (hint) hint.textContent = '保存中…';
+        await saveConfig({ quiet: true });
+        if (hint) hint.textContent = '已保存';
+        setTimeout(() => { if (hint) hint.textContent = ''; }, 2000);
+      } catch (err) {
+        if (hint) hint.textContent = `保存失败：${err?.message ?? err}`;
+      }
+    });
+
+    $('#stk-group-clear')?.addEventListener('click', () => {
+      if (!activeGid) return;
+      delete overrides()[activeGid];
+      renderChips();
+      queueSave();
+    });
+
+    syncVisibility();
+  }

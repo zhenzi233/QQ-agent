@@ -145,10 +145,14 @@ export function formatStickerList(entries, query = '', limit = 48) {
  * rotatePeriodMin <= 0 时关闭轮换；now 仅用于测试注入稳定的轮次。
  * withId 未显式设置时，max <= 15 才附带 id，避免提示词无谓膨胀。
  */
-export function buildStickerContext(entries, max = 10, { rotatePeriodMin = 60, now = Date.now(), withId = Number(max) <= 15 } = {}) {
+// withId 默认 true：send_sticker 要求 stickerId，而候选数超过 15 时旧逻辑会把 id
+// 从提示词里省掉 —— 模型拿不到可发送标识，只能放弃或额外调 list_stickers，
+// 表现为「候选调得越大、表情发得越少」。id 是发送的必要条件，不该被省。
+export function buildStickerContext(entries, max = 10, { rotatePeriodMin = 60, now = Date.now(), withId = true } = {}) {
   const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
   if (!list.length) return '';
-  const total = Math.max(1, Math.min(30, Number(max) || 10));
+  // 上限 60：原来卡在 30，用户在 UI 里设 50 会被静默截断，以为放宽了其实没有。
+  const total = Math.max(1, Math.min(60, Number(max) || 10));
   const byUse = [...list].sort((a, b) =>
     (b.useCount || 0) - (a.useCount || 0)
     || ((b.desc || b.localNote) ? 1 : 0) - ((a.desc || a.localNote) ? 1 : 0)

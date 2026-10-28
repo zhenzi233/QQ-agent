@@ -119,6 +119,57 @@ text 里说明这是动图的帧拼图，动作走向就能看到了。拼图失
 判定刻意保守：含「【】」思考标记、代码块、列表、或以「让我/我应该/先看看」开头的，
 一律不发；超过 120 字不发。**宁可沉默，也不把内心戏发进群。**
 
+### 10. 表情包支持分群设置
+
+`src/config.js` / `src/prompt.js` / `src/orchestrator.js` + 设置页
+
+`sticker.unifiedSticker`（默认 true=全群统一）+ `sticker.groupOverrides[群号]`，
+解析函数 `stickerConfigForChat(chatKey)`：统一模式返回全局值，分群模式按群合并
+（缺字段回落全局），只允许覆盖 `enabled / encourage / promptMaxStickers`。
+设置页「表情包」卡片头部多了「统一设置」开关，关掉后出现群按钮和保存按钮。
+
+### 11. 候选数超过 15 时不输出表情 id（已修）
+
+`src/stickers.js`
+
+`buildStickerContext(entries, max, { withId })` 原来默认 `withId = max <= 15`，
+`max` 又被 `Math.min(30, …)` 截断。于是候选一调大，提示词里就**不带 id**，
+而 `send_sticker` 的必填参数是 `stickerId` —— 模型拿不到 id，只能放弃或额外查一次，
+表现为「**候选数越大、表情发得越少**」。
+
+现在：`withId` 默认恒 true（可显式关掉），上限 30 → 60。单测已同步
+（`test/sticker-context.mjs`）。
+
+### 12. 引用的图片能看
+
+`src/app.js` / `src/onebot.js` / `src/tools.js` / `src/safe-fetch.js`
+
+三处问题叠在一起：
+
+1. `resolveReply` 把非文本段映射成 CQ 类型名（`[image]`），且不带消息 id → 模型既不知道
+   那是图、也没参数可调；现在映射成 `[图片]`/`[表情]`/`[语音]`…，并带出 `#id`，
+   由 `onebot.js` 拼进引用块。
+2. `get_message_images` 只查本会话存档 → 自己发的 / 太老的消息查不到；现在查不到就用
+   `onebot.getMsg` 取原始段落兜底。
+3. 本机 `file:///` 图片被当网络 URL 下载 → 必然失败；现在先读盘（支持「url 是目录 +
+   file 是文件名」这种脏数据），读不到才走网络。取不回时给的是
+   「原图已不可读，不要编造画面」，而不是一句「获取失败」。
+
+附带修一个环境坑：**Clash/FlClash 的 fake-ip（198.18.0.0/15）** 会被
+`safe-fetch` 判成内网而拦掉，导致开代理时所有图片抓取失败。现在只对这一段放行
+（`security.allowFakeIpHosts`，默认开），真内网段照旧拦。
+
+### 13. 搜索改走 DeepSeek API
+
+`config.webSearch`
+
+原默认是**抓 Bing 搜索结果页**，依赖能访问 `cn.bing.com`。实测：直连被墙、走代理
+TLS 握手直接卡死（节点不可用），于是「一开代理搜索就挂」。
+
+现在 `provider = deepseek`，走 `https://api.deepseek.com/responses` + `web_search` 工具，
+由服务端搜，不依赖本机能不能上外网。代价是慢（约 10~12 秒）且只返回一段总结而非
+多条带链接的结果。
+
 ## 脚本
 
 `tools/local-scripts/` 下是本机维护脚本（转发展开修复、看图分页、表情指纹、表情库迁移、

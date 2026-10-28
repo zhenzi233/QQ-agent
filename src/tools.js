@@ -25,6 +25,51 @@ function currentGifRoute() {
   return resolveGifRoute({ vision: cfg.api?.vision !== false, video: cfg.api?.video === true });
 }
 
+/**
+ * 把「url + file」解析成本机上一个真实存在的图片文件路径。
+ * 兼容三种脏数据（都是实测遇到的）：
+ *   file:///F:/dir            ← url 是目录，真正的文件名在 file 里
+ *   file:///F:/dir/x.png      ← 正常本地文件
+ *   F:/dir/x.png / C:\dir\x.png
+ * 解析不出就返回空串（交给网络下载路径）。
+ */
+function resolveLocalImageFile(url, file = '') {
+  const raw = String(url || '').trim();
+  const name = String(file || '').trim();
+  const unescape = (p) => {
+    let out = p;
+    try { out = decodeURIComponent(p); } catch { /* 保留原样 */ }
+    return out.replace(/^\/([A-Za-z]:[\\/])/, '$1');   // /F:/x → F:/x
+  };
+  const candidates = [];
+  if (/^file:\/\//i.test(raw)) {
+    const p = unescape(raw.replace(/^file:\/\/\/?/i, ''));
+    candidates.push(p);
+    if (name) candidates.push(require('path').join(p, name.replace(/^.*[\\/]/, '')));
+  } else if (/^[A-Za-z]:[\\/]/.test(raw)) {
+    candidates.push(raw);
+    if (name) candidates.push(require('path').join(raw, name.replace(/^.*[\\/]/, '')));
+  }
+  for (const c of candidates) {
+    try {
+      if (c && require('fs').statSync(c).isFile()) return c;
+    } catch { /* 下一个 */ }
+  }
+  return '';
+}
+
+/** 本机图片文件 → dataURL（按文件头判断 mime，不信任扩展名）。 */
+function localImageToDataUrl(filePath) {
+  const buf = require('fs').readFileSync(filePath);
+  if (!buf || !buf.length) throw new Error('本地图片为空');
+  let mime = 'image/png';
+  if (buf[0] === 0xff && buf[1] === 0xd8) mime = 'image/jpeg';
+  else if (buf.slice(0, 3).toString('latin1') === 'GIF') mime = 'image/gif';
+  else if (buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') mime = 'image/webp';
+  else if (buf[0] === 0x42 && buf[1] === 0x4d) mime = 'image/bmp';
+  return { dataUrl: `data:${mime};base64,${buf.toString('base64')}`, gifBuffer: mime === 'image/gif' ? buf : null };
+}
+
 async function downloadImageAsDataUrl(url, timeoutMs = 30000) {
   const safeUrl = await validateImageUrl(url);
   const { buffer, contentType } = await safeFetchBinary(safeUrl);
@@ -639,9 +684,24 @@ function registerAllTools() {
     async execute(ctx, args) {
       try {
         const entry = ctx.store.findByMid(ctx.chatKey, args.messageId);
-        if (!entry) return err(`当前会话找不到消息 ${args.messageId}。${midHint(ctx)}`);
-        const allUrls = (entry.media || []).filter((m) => m.kind === 'image' && m.url).map((m) => m.url);
-        if (!allUrls.length) return ok(`消息 ${args.messageId} 没有可查看的图片`);
+        // 取媒体清单：优先本会话存档，存档里没有（自己发的/太老/来自引用）就用协议端取原始段落
+        let mediaList = entry
+          ? (entry.media || []).filter((m) => m.kind === 'image' && (m.url || m.file))
+          : [];
+        if (!mediaList.length && ctx.onebot?.getMsg) {
+          try {
+            const raw = await ctx.onebot.getMsg(String(args.messageId));
+            const segs = Array.isArray(raw?.message) ? raw.message : [];
+            mediaList = segs
+              .filter((seg) => ['image', 'mface'].includes(seg?.type))
+              .map((seg) => ({ kind: 'image', url: String(seg?.data?.url ?? ''), file: String(seg?.data?.file ?? '') }))
+              .filter((m) => m.url || m.file);
+          } catch { /* 协议端也取不到就走下面的错误提示 */ }
+        }
+        if (!mediaList.length) {
+          return err(`消息 ${args.messageId} 里没找到可看的图片（存档和协议端都没有）。如果那是引用的图，先确认引用里带了 #id；也可以用 get_recent_messages 找到带图的那条。`);
+        }
+        const allUrls = mediaList;
         // 分页：一条消息（尤其合并转发）可能带几十张图，一次全塞 base64 会到十几 MB，
         // 模型接口直接 400/413，表现就是"看不到聊天记录里的图片"。默认一次 4 张。
         const offset = Math.max(0, Number(args.offset) || 0);
@@ -652,10 +712,24 @@ function registerAllTools() {
         }
         const results = [];
         const failed = [];
-        for (const url of urls) {
-          try { results.push(await downloadImageAsDataUrl(url)); } catch (e) { failed.push(String(e?.message ?? e)); }
+        let unresolvedLocal = 0;   // 本机图源但文件已不在（引用自己发的表情时常这样）
+        for (const media of urls) {
+          const local = resolveLocalImageFile(media.url, media.file);
+          const looksLocal = /^file:\/\//i.test(String(media.url || '')) || /^[A-Za-z]:[\\/]/.test(String(media.url || ''));
+          if (!local && looksLocal) unresolvedLocal += 1;
+          if (local) {
+            // 本地表情库/本机图片：不下载，直接读盘（走网络必然失败）
+            try { results.push(localImageToDataUrl(local)); } catch (e) { failed.push(String(e?.message ?? e)); }
+            continue;
+          }
+          try { results.push(await downloadImageAsDataUrl(media.url)); } catch (e) { failed.push(String(e?.message ?? e)); }
         }
-        if (!results.length) return err(`图片获取失败：${failed.join('；')}`);
+        if (!results.length) {
+          if (unresolvedLocal) {
+            return err(`这条消息的图是本机表情库发出去的（url 指向本地目录），原图已经取不回来了——引用自己发过的表情时常见。不要编造画面内容，直接按引用的文字和上下文回应。`);
+          }
+          return err(`图片获取失败：${failed.join('；')}`);
+        }
         const note = failed.length ? `（另有 ${failed.length} 张获取失败）` : '';
         // GIF 动图可能被转成了视频部件（见 downloadImageAsDataUrl），文案里区分张数
         const videoCount = results.filter((r) => r?.gifVideo).length;

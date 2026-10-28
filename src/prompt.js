@@ -1,3 +1,4 @@
+import { stickerConfigForChat } from './config.js';
 // 提示词组装 —— 新架构的心脏。
 //
 // 设计目标（对应"无状态 + 每次新开会话"的成本模型）：
@@ -131,9 +132,10 @@ function memoryRules() {
   ].join('\n');
 }
 
-function stickerRules() {
+function stickerRules(chatKey = '') {
   // 活跃度档位直接改写策略段的频率行（引导统一在系统提示，不在"本次输入"重复）
-  const lvl = Math.min(3, Math.max(0, Number(getConfig().sticker?.encourage) || 0));
+  // 分群设置：走 stickerConfigForChat，统一模式下等价于全局值。
+  const lvl = Math.min(3, Math.max(0, Number(stickerConfigForChat(chatKey)?.encourage) || 0));
   return [
     buildStickerStrategyHint(lvl),
     '',
@@ -211,6 +213,8 @@ function renderSkillSections(sections) {
 /** 组装系统提示。 */
 export function buildSystemPrompt({ persona, skillContext, extraSections = [] } = {}) {
   const cfg = persona ?? getConfig().persona;
+  // 表情包分群设置要用会话标识；取不到就退回全局（'' 在统一模式下等价）
+  const chatKeyForSticker = String(skillContext?.chatKey || skillContext?.streamId || '');
   // extraSections：调用方在**运行时**算出来的片段（如主人身份说明）。
   // 与 Skill 自己声明的 prompt.sections 走同一条渲染路径 —— 都排在核心规则之后，
   // 且不参与 skillManager 的开关判断（调用方已经判断过了）。
@@ -267,7 +271,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
     '',
     memoryRules(),
     '',
-    stickerRules(),
+    stickerRules(chatKeyForSticker),
     '',
     qqSceneRules(),
     '',
@@ -790,8 +794,10 @@ export function buildUserPrompt(ctx) {
   }
 
   // 表情包（目录本身）。活跃度档位已并入系统提示的【表情包策略】段，这里不再重复引导。
-  if (cfg.sticker?.enabled !== false) {
-    const stickerCtx = buildStickerContext(ctx.stickerEntries || [], Number(cfg.sticker?.promptMaxStickers) || 10);
+  // buildUserPrompt 没有 skillContext，会话标识直接从 ctx.chatKey 取（这里才是真正的会话上下文）
+  const stickerCfg = stickerConfigForChat(ctx.chatKey);
+  if (stickerCfg.enabled !== false) {
+    const stickerCtx = buildStickerContext(ctx.stickerEntries || [], Number(stickerCfg.promptMaxStickers) || 10);
     if (stickerCtx) parts.push(stickerCtx);
   }
 

@@ -481,6 +481,10 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
               const parts = [];
               if (senderLabel) parts.push(senderLabel);
               if (info.text) parts.push(info.text);
+              // 引用的是图片/表情时，必须给出 id，模型才知道用哪个参数去看
+              if (info.hasMedia && info.id) {
+                parts.push(`图片 #${info.id}（可用 get_message_images 查看）`);
+              }
               replyText = `[引用 ${parts.join('：')}]`;
             }
           } catch { /* 解析失败降级 */ }

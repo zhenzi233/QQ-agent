@@ -943,6 +943,10 @@ return `
       icon: '😄',
       title: '表情包',
       sub: '收藏表情同步 / 发送积极度 / 提示词列举数',
+      // 卡头：统一开关（与「活跃设置」同款语义）
+      extra: `<span class="ac-head-controls"><span class="ac-head-div"></span>
+        <label class="switch" style="padding:0" title="开 = 所有群共用下面这套表情设置；关 = 每个群单独设置"><input type="checkbox" id="stk-unified" ${c.sticker?.unifiedSticker !== false ? 'checked' : ''} /><span class="track"><span class="thumb"></span></span><span style="font-size:12px">统一设置</span></label>
+      </span>`,
       body: `
       <div class="checkbox-row"><input type="checkbox" id="cfg-sticker" ${c.sticker.enabled ? 'checked' : ''} />
         <label for="cfg-sticker">启用表情包（收藏表情同步 + 发送工具）</label></div>
@@ -964,6 +968,19 @@ return `
           每次唤醒时，系统会把收藏表里最多这么多个表情包列进提示词供模型挑选。
           列得越多模型选择越丰富，但 token 成本也越高；收藏很多时适当调大，收藏少或想省 token 就调小。
         </div>
+      </div>
+      <div id="stk-group-area" style="margin-top:14px;border-top:1px dashed rgba(128,128,128,.3);padding-top:12px">
+        <div class="field">
+          <label>要单独设置的群聊（来自白名单，点击切换）</label>
+          <div class="ac-group-buttons" id="stk-group-buttons"></div>
+        </div>
+        <div id="stk-group-editor"></div>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+          <button class="btn btn-primary btn-small" id="stk-group-save" type="button">保存</button>
+          <button class="btn btn-small btn-danger" id="stk-group-clear" type="button">清除该群的单独设置</button>
+          <span class="hint" id="stk-group-hint"></span>
+        </div>
+        <div class="hint">改完点「保存」提交；未单独设置的群沿用上面的全局值。</div>
       </div>`
     })}
 

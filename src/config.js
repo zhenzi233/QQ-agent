@@ -244,6 +244,10 @@ export const DEFAULT_CONFIG = {
     promptMaxStickers: 10,
     collectEnabled: true,
     maxCollectPerHour: 10,
+    // 分群设置：true = 所有群共用上面这几个值；false = 按下表按群覆盖
+    unifiedSticker: true,
+    // 按群覆盖：{ "群号": { enabled, encourage, promptMaxStickers } }，缺省字段回落全局
+    groupOverrides: {},
     // 发表情包的积极程度（0=不鼓励 1=偶尔 2=较积极 3=很积极）。
     // 这是在提示词层面引导模型"更愿意用表情回应"，不是强制每次都发 ——
     // 强制会显得机械，引导才能让它在合适的时候自然用上。
@@ -679,6 +683,33 @@ export function personaForChat(chatKey) {
  * 峰谷切换：peakSchedule.enabled 时，先按当前时间判定落在高峰/低谷时段，
  * 用该时段的 sliderPos 换算出档位**覆盖**全局滑条（在 unifiedTier / 分群设置之前生效）。
  */
+/**
+ * 取某个会话实际生效的表情包配置。
+ *
+ * unifiedSticker !== false（默认）→ 直接用全局；
+ * 分群模式 → 合并 groupOverrides[群号]（只允许覆盖 enabled / encourage / promptMaxStickers，
+ * 其余字段如 collectEnabled 属于"收藏"这个全局动作，不按群走）。
+ *
+ * 与 storeConfigForChat 一样接受 chatKey（group:123 / private:456），
+ * 也兼容只传群号的写法（群覆盖表按群号建键）。
+ */
+export function stickerConfigForChat(chatKey) {
+  const sticker = getConfig().sticker || {};
+  if (sticker.unifiedSticker !== false) return sticker;
+  const raw = String(chatKey || '');
+  const id = raw.includes(':') ? raw.split(':').slice(1).join(':') : raw;
+  const overrides = sticker.groupOverrides || {};
+  const patch = overrides[id] || overrides[raw];
+  if (!patch || typeof patch !== 'object') return sticker;
+  const out = { ...sticker };
+  if (patch.enabled === true || patch.enabled === false) out.enabled = patch.enabled;
+  const lvl = Number(patch.encourage);
+  if (Number.isFinite(lvl)) out.encourage = Math.min(3, Math.max(0, lvl));
+  const max = Number(patch.promptMaxStickers);
+  if (Number.isFinite(max) && max > 0) out.promptMaxStickers = Math.min(50, Math.max(1, max));
+  return out;
+}
+
 export function storeConfigForChat(chatKey) {
   const store = getConfig().store || {};
   // ── 指令禁言：该群被禁言且未到期 → 强制 1 档（仅艾特）──

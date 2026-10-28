@@ -63,6 +63,22 @@ function parseEmbeddedIpv4(h) {
   return null;
 }
 
+/**
+ * Clash / FlClash 的 fake-ip 段（198.18.0.0/15）。
+ *
+ * 开 TUN 模式时，DNS 会被劫持成这个段的假 IP（真实连接仍由代理转发）。
+ * 它在 RFC2544 基准测试段里，所以 isPrivateIp 会判成"内网"，导致
+ * **所有经过代理的图片/网页抓取都被拦**——实测 QQ 图床 gchat.qpic.cn
+ * 解析到 198.18.x.x，引用图片直接失败。
+ * 这里单独放行这一段的**DNS 解析结果**（只放宽这一条路，不放开 10/172/192 段）。
+ */
+export function isFakeIp(ip) {
+  const h = String(ip || '').trim();
+  if (net.isIP(h) !== 4) return false;
+  const parts = h.split('.').map(Number);
+  return parts[0] === 198 && parts[1] >= 18 && parts[1] <= 19;
+}
+
 export function isPrivateIp(ip) {
   const h = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) return true;
@@ -130,7 +146,10 @@ async function resolveSafeHost(hostname, { allowPrivate = false } = {}) {
   if (!addresses.length) throw new Error('域名没有解析结果');
   if (!allowPrivate) {
     for (const { address } of addresses) {
-      if (isPrivateIp(address)) throw new Error('域名解析到内网/本机地址，已阻止');
+      // fake-ip 放行：代理把域名解析成 198.18.x.x，真实流量走代理出去，不是真的内网
+      if (isPrivateIp(address) && !((getConfig().security?.allowFakeIpHosts !== false) && isFakeIp(address))) {
+        throw new Error('域名解析到内网/本机地址，已阻止');
+      }
     }
   }
   return addresses[0].address;

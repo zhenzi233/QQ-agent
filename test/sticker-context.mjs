@@ -44,11 +44,16 @@ check('不同轮次得到不同的轮换批', () => {
   assert.notEqual(first, second);
 });
 
-check('withId 控制 id，且大 max 默认不带 id', () => {
+check('withId 控制 id，且默认始终带 id（大 max 也一样）', () => {
   const withId = buildStickerContext(entries, 4, { rotatePeriodMin: 0, withId: true });
   assert.ok(withId.split('\n').filter((line) => line.startsWith('- ')).every((line) => line.includes('id=')));
-  const withoutId = buildStickerContext(entries, 16, { rotatePeriodMin: 0 });
-  assert.ok(withoutId.split('\n').filter((line) => line.startsWith('- ')).every((line) => !line.includes('id=')));
+  // 2026-10-23：默认值从「max<=15 才带 id」改成恒 true ——
+  // send_sticker 需要 stickerId，候选一多就不带 id 会让模型发不出表情。
+  const bigDefault = buildStickerContext(entries, 16, { rotatePeriodMin: 0 });
+  assert.ok(bigDefault.split('\n').filter((line) => line.startsWith('- ')).every((line) => line.includes('id=')));
+  // 显式关掉仍生效（留给「只要描述不要 id」的场景）
+  const explicitOff = buildStickerContext(entries, 16, { rotatePeriodMin: 0, withId: false });
+  assert.ok(explicitOff.split('\n').filter((line) => line.startsWith('- ')).every((line) => !line.includes('id=')));
 });
 
 // ── 前缀缓存稳定性：useCount 不进提示词文本 ──────────────────────────────

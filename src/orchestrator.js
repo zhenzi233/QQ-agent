@@ -8,7 +8,7 @@
 //
 // 同一会话（群/私聊）同时最多一个运行；运行期间新消息只写 JSON（未读），不叠加触发。
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
-import { getConfig, storeConfigForChat, personaForChat } from './config.js';
+import { getConfig, storeConfigForChat, personaForChat, stickerConfigForChat } from './config.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
@@ -759,7 +759,7 @@ export class Orchestrator {
 
     // 表情库快照（提示词用）
     let stickerEntries = [];
-    if (cfg.sticker?.enabled !== false) {
+    if (stickerConfigForChat(chatKey).enabled !== false) {
       try { stickerEntries = (await this.stickers.sync(false)).entries ?? []; } catch { stickerEntries = []; }
     }
 
