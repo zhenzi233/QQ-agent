@@ -358,6 +358,16 @@ export const DEFAULT_CONFIG = {
       system: true              // 系统反馈
     }
   },
+  // 图片本地化：消息入库时就把图片字节存到 data/images/，之后看图读盘，
+  // 不再依赖 QQ 图床 rkey 的 ~1 小时时效。关掉即回到「每次现拉 URL」的旧行为。
+  media: {
+    localize: {
+      enabled: true,
+      maxBytes: 8388608,     // 单张上限 8MB
+      keepDays: 14,          // 保留天数
+      maxTotalMb: 2048       // 总容量上限（超出按最老删）
+    }
+  },
   // Skill 统一开关：唯一的"能力启停"来源。
   // 形状：{ [skillId]: { enabled: boolean, ...该 Skill 自己的设置 } }
   // 这里只存用户改过的值；默认值来自各 Skill 的 skill.json → settings。

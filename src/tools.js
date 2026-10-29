@@ -12,6 +12,7 @@ import { formatStickerList } from './stickers.js';
 import { skillManager } from './skills/manager.js';
 import { validateImageUrl, safeFetchBinary, browseLockState, checkBrowseLock } from './safe-fetch.js';
 import { needsRKey, withRKey, pickRKey } from './image-url.js';
+import { findLocalByMid } from './image-cache.js';
 import { webSearch, webFetch } from './web-search.js';
 import { expandForwardNodes, resolveForwardId } from './onebot.js';
 import { registerTool, listTools } from './tool-registry.js';
@@ -489,6 +490,16 @@ function registerAllTools() {
     },
     async execute(ctx, args) {
       try {
+        // 本地化优先：入库时存过的话直接读盘，不看 URL 时效、也不依赖 rkey
+        const cachedPath = findLocalByMid(args.messageId);
+        if (cachedPath) {
+          try {
+            return getImagePartsOrVideo(
+              `消息 ${args.messageId} 的图片（本地缓存）：`,
+              [localImageToDataUrl(cachedPath)]
+            );
+          } catch { /* 读盘失败就退回原流程 */ }
+        }
         const entry = ctx.store.findByMid(ctx.chatKey, args.messageId);
         if (!entry) return err(`在当前会话找不到消息 ${args.messageId}。${midHint(ctx)}`);
         const imageMedia = (entry.media || []).find((m) => m.kind === 'image' && (m.url || m.file));

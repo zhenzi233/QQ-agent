@@ -203,6 +203,33 @@ https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=...&spec=0
 
 `src/image-url.js` 是纯函数模块（`needsRKey` / `withRKey` / `pickRKey`），可直接单测。
 
+### 15. 图片本地化（入库即落盘）
+
+`src/image-cache.js`（新增）+ `src/app.js` + `src/tools.js`
+
+QQ 图床 URL 有时效：新图床的 `rkey` 约 1 小时，老 `gchat` 链接同样会过期。
+「过一会儿再让它看看这张图」就会 400 —— 即使第 14 条的签名补丁已经生效。
+
+现在消息**入库时**就把图片字节抓下来存到 `data/images/`，之后看图直接读盘：
+
+```
+data/images/<sha1>.<ext>      # 按内容命名，同一张图只存一份
+data/images/index.json        # mid → { sha1, file, bytes, at, chatKey }
+```
+
+要点：
+
+- **不 await**：`localizeMessage()` 是 fire-and-forget，抓图失败只丢这一张，
+  `media` 里的原 URL 仍在，工具稍后会重试 —— ingest 热路径不能被网络卡住
+- **看图优先读本地**：`get_message_images` 先查 `findLocalByMid(mid)`，命中就直接
+  返回本地文件；未命中才走「签名 URL → 下载」的老路
+- **容量与时效**：`config.media.localize`（单张 8MB / 保留 14 天 / 总 2GB），
+  启动 60 秒后清一次，之后每 24 小时一次，超出按最老删
+- 本地化也复用了第 14 条的 rkey 签名（先签再抓），所以新图床的图也能存下来
+
+实测：一张原本 400 的 `multimedia` 图，本地化后落盘 631045 字节（`ffd8ffe0` = JPEG），
+按 mid 可反查到 `data/images/d674cd6e….jpg`。
+
 ## 脚本
 
 `tools/local-scripts/` 下是本机维护脚本（转发展开修复、看图分页、表情指纹、表情库迁移、

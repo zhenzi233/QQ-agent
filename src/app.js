@@ -24,6 +24,7 @@ import { startTelemetryLoop } from './telemetry.js';
 import { loadPlugins, watchPlugins } from './plugin-loader.js';
 import { skillManager } from './skills/manager.js';
 import { extractCandidateUrls, dispatchMediaLinks } from './media-links.js';
+import { localizeMessage, pruneImages } from './image-cache.js';
 import { createRoutes } from './routes.js';
 import * as instanceLockModule from './instance-lock.js';
 import { logger } from './logger.js';
@@ -130,6 +131,18 @@ function annotateStickerRepeats(text, chatKey) {
 
 export function createApp({ log = console.log } = {}) {
   const cfg = getConfig();
+
+  // 图片缓存清理：启动 60 秒后跑一次（等 IO 稳定），之后每 24 小时一次。
+  // 保留天数与容量上限在 config.media.localize 里配。
+  const pruneTimer = setTimeout(() => {
+    try {
+      const n = pruneImages();
+      if (n) log(`[image-cache] 清理 ${n} 张旧图片`);
+    } catch { /* 忽略 */ }
+  }, 60 * 1000);
+  pruneTimer.unref?.();
+  const pruneInterval = setInterval(() => { try { pruneImages(); } catch { /* 忽略 */ } }, 24 * 3600 * 1000);
+  pruneInterval.unref?.();
 
   // 详尽日志：把 createApp 的 log 接到分级日志系统（落盘 + 内存缓冲 + SSE）。
   // 关键：logger 的 mirrorConsole 已经会走 console，所以这里**只写 logger、不再调原 log**，
@@ -993,6 +1006,13 @@ export function createApp({ log = console.log } = {}) {
     emit('chat-update', `${kind}:${id}`);
     // 逐条触发判定：把刚入库的条目交给编排器（entry 让它能精确标这一条已读）
     orchestrator.onIncoming(`${kind}:${id}`, entry);
+
+    // 图片本地化：趁 URL 新鲜把字节存本地（不 await，不能卡 ingest 热路径）。
+    // 失败只丢这一张，media 里的原 URL 仍在，工具稍后会重试。
+    if (media.some((m) => m?.kind === 'image')) {
+      localizeMessage({ onebot, chatKey: `${kind}:${id}`, mid: event.message_id, media })
+        .catch((e) => log(`[image-cache] 本地化失败：${e?.message ?? e}`));
+    }
 
     // 链接媒体转发（确定性）：刻意不 await —— 百兆级下载/上传不能卡住 ingest 热路径。
     // 内部已把错误全部收口（含 provider 抛错），这里再挂一次 catch 只为防漏网。
