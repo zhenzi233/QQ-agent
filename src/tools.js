@@ -11,6 +11,7 @@ import { normalizeMessageList, unquoteJsonString } from './util.js';
 import { formatStickerList } from './stickers.js';
 import { skillManager } from './skills/manager.js';
 import { validateImageUrl, safeFetchBinary, browseLockState, checkBrowseLock } from './safe-fetch.js';
+import { needsRKey, withRKey, pickRKey } from './image-url.js';
 import { webSearch, webFetch } from './web-search.js';
 import { expandForwardNodes, resolveForwardId } from './onebot.js';
 import { registerTool, listTools } from './tool-registry.js';
@@ -33,6 +34,32 @@ function currentGifRoute() {
  *   F:/dir/x.png / C:\dir\x.png
  * 解析不出就返回空串（交给网络下载路径）。
  */
+/**
+ * 需要时给图片 URL 补 rkey（QQ 新图床 multimedia.nt.qq.com.cn 不带 rkey 一律 400）。
+ * rkey 从协议端 get_rkey 取，按会话类型选 type（群 20 / 私聊 10），带 5 分钟内存缓存，
+ * 失败就返回原 URL —— 调用方照旧会走一次普通下载。
+ */
+const RKEY_CACHE = { at: 0, primary: null, alternate: null };
+
+async function withSignedImageUrl(ctx, rawUrl) {
+  if (!needsRKey(rawUrl)) return { url: rawUrl, alternate: null };
+  const isGroup = String(ctx?.chatKey || '').startsWith('group:');
+  const fresh = Date.now() - RKEY_CACHE.at < 5 * 60 * 1000;
+  if (!fresh || !RKEY_CACHE.primary) {
+    try {
+      const res = await ctx?.onebot?.call?.('get_rkey', {});
+      const { primary, alternate } = pickRKey(res, { isGroup });
+      RKEY_CACHE.primary = primary;
+      RKEY_CACHE.alternate = alternate;
+      RKEY_CACHE.at = Date.now();
+    } catch { /* 取不到就按未签名处理 */ }
+  }
+  if (!RKEY_CACHE.primary) return { url: rawUrl, alternate: null };
+  const primaryUrl = withRKey(rawUrl, RKEY_CACHE.primary.rkey);
+  const alternateUrl = RKEY_CACHE.alternate ? withRKey(rawUrl, RKEY_CACHE.alternate.rkey) : null;
+  return { url: primaryUrl, alternate: alternateUrl };
+}
+
 function resolveLocalImageFile(url, file = '') {
   const raw = String(url || '').trim();
   const name = String(file || '').trim();
@@ -722,7 +749,17 @@ function registerAllTools() {
             try { results.push(localImageToDataUrl(local)); } catch (e) { failed.push(String(e?.message ?? e)); }
             continue;
           }
-          try { results.push(await downloadImageAsDataUrl(media.url)); } catch (e) { failed.push(String(e?.message ?? e)); }
+          try {
+            const signed = await withSignedImageUrl(ctx, media.url);
+            let lastError = null;
+            for (const candidate of [signed.url, signed.alternate].filter(Boolean)) {
+              try { results.push(await downloadImageAsDataUrl(candidate)); lastError = null; break; }
+              catch (e) { lastError = e; }
+            }
+            if (lastError) failed.push(String(lastError?.message ?? lastError));
+          } catch (e) {
+            failed.push(String(e?.message ?? e));
+          }
         }
         if (!results.length) {
           if (unresolvedLocal) {

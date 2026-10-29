@@ -170,6 +170,39 @@ TLS 握手直接卡死（节点不可用），于是「一开代理搜索就挂�
 由服务端搜，不依赖本机能不能上外网。代价是慢（约 10~12 秒）且只返回一段总结而非
 多条带链接的结果。
 
+### 14. 新图床图片补 rkey 签名
+
+`src/image-url.js`（新增）+ `src/tools.js`
+
+QQ 现在给群图用的是新图床：
+
+```
+https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=...&spec=0
+```
+
+**这条 URL 不带 rkey 时一律 HTTP 400 `invalid rkey`**；老的 `gchat.qpic.cn` 链接不需要签名。
+结果就是「有的图能看、有的图看不到」，看起来像随机故障，其实按图床域名分得清清楚楚。
+
+实测（同一张图）：
+
+| URL | 结果 |
+|---|---|
+| 原样（无 rkey） | 400 invalid rkey |
+| 拼上 `get_rkey` 返回里 **type=20** 的那条 | **200，20258 字节** |
+| 拼上 type=10 的那条 | 400 |
+
+而 SnowLuma 2.0.3 **自己**下载同一张图也是 400（用它的 `download_file_image_stream`
+直接试：`download failed: HTTP 400`）——它拿得到 rkey，但没拼进图片 URL。
+
+所以补丁放在客户端侧：
+
+1. 下载前判断 host 是不是新图床、URL 里有没有 `rkey=`；
+2. 没有就调协议端 `get_rkey`，群聊取 type=20、私聊取 type=10；
+3. 拼上去再下载，主 rkey 失败自动换另一条重试；
+4. rkey 带 5 分钟内存缓存，避免每次看图都多一次协议端往返。
+
+`src/image-url.js` 是纯函数模块（`needsRKey` / `withRKey` / `pickRKey`），可直接单测。
+
 ## 脚本
 
 `tools/local-scripts/` 下是本机维护脚本（转发展开修复、看图分页、表情指纹、表情库迁移、
